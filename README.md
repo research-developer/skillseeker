@@ -1,4 +1,4 @@
-# Claude Skills/MCP Aggregator
+# Skillseeker
 
 A CLI tool that aggregates Claude skills, plugins, agents, and MCP servers from multiple marketplaces into a unified, searchable format.
 
@@ -15,8 +15,8 @@ A CLI tool that aggregates Claude skills, plugins, agents, and MCP servers from 
 
 ```bash
 # Clone the repository
-git clone https://github.com/youruser/claude-aggregator
-cd claude-aggregator
+git clone https://github.com/youruser/skillseekerregator
+cd skillseekerregator
 
 # Install with pip
 pip install -e .
@@ -33,10 +33,18 @@ Set your FireCrawl API key:
 export FIRECRAWL_API_KEY="fc-YOUR-API-KEY"
 ```
 
+Or use a `.env` file (recommended):
+
+1. Copy the example file:
+   ```bash
+   cp .env.example .env
+   ```
+2. Edit `.env` and add your API key.
+
 Or pass it via the CLI:
 
 ```bash
-claude-agg --api-key "fc-YOUR-API-KEY" search
+skillseeker --api-key "fc-YOUR-API-KEY" search
 ```
 
 ## Usage
@@ -45,74 +53,74 @@ claude-agg --api-key "fc-YOUR-API-KEY" search
 
 ```bash
 # Search all sources
-claude-agg search
+skillseeker search
 
 # Search with a query
-claude-agg search -q "database"
+skillseeker search -q "database"
 
 # Search specific sources
-claude-agg search -s skillsmp -s mcp_so -q "postgres"
+skillseeker search -s skillsmp -s mcp_so -q "postgres"
 ```
 
 ### Filtering
 
 ```bash
 # Filter by resource type
-claude-agg search -t mcp_server
+skillseeker search -t mcp_server
 
 # Filter by minimum stars
-claude-agg search --min-stars 100
+skillseeker search --min-stars 100
 
 # Filter by category
-claude-agg search -c "database"
+skillseeker search -c "database"
 
 # Filter by author
-claude-agg search -a "anthropic"
+skillseeker search -a "anthropic"
 
 # Combine filters
-claude-agg search -t skill --min-stars 50 -c development
+skillseeker search -t skill --min-stars 50 -c development
 ```
 
 ### Output Formats
 
 ```bash
 # Table format (default)
-claude-agg search -f table
+skillseeker search -f table
 
 # JSON format
-claude-agg search -f json
+skillseeker search -f json
 
 # Simple text format
-claude-agg search -f simple
+skillseeker search -f simple
 
 # Save to file
-claude-agg search -f json -o results.json
+skillseeker search -f json -o results.json
 ```
 
 ### Sorting
 
 ```bash
 # Sort by stars (default)
-claude-agg search --sort stars
+skillseeker search --sort stars
 
 # Sort by downloads
-claude-agg search --sort downloads
+skillseeker search --sort downloads
 
 # Sort by name
-claude-agg search --sort name
+skillseeker search --sort name
 ```
 
 ### Other Commands
 
 ```bash
 # List available sources
-claude-agg sources
+skillseeker sources
 
 # List resource types
-claude-agg types
+skillseeker types
 
 # Export unified schema
-claude-agg schema -o my-schema.json
+skillseeker schema -o my-schema.json
 ```
 
 ## Sources
@@ -161,25 +169,25 @@ All resources are normalized to this schema:
 ### Find popular MCP database servers
 
 ```bash
-claude-agg search -t mcp_server -c database --min-stars 100 --sort stars
+skillseeker search -t mcp_server -c database --min-stars 100 --sort stars
 ```
 
 ### Export all skills to JSON
 
 ```bash
-claude-agg search -t skill -f json -o all-skills.json
+skillseeker search -t skill -f json -o all-skills.json
 ```
 
 ### Search for authentication-related resources
 
 ```bash
-claude-agg search -q "auth" -f table
+skillseeker search -q "auth" -f table
 ```
 
 ### Find anthropic's official resources
 
 ```bash
-claude-agg search -a anthropic -f simple
+skillseeker search -a anthropic -f simple
 ```
 
 ## Development
@@ -192,8 +200,9 @@ pip install -e ".[dev]"
 pytest
 
 # Format code
-black src/
-ruff check src/
+# Format code
+black .
+ruff check .
 ```
 
 ## Architecture

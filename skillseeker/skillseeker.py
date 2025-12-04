@@ -13,12 +13,16 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 import click
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import box
 from firecrawl import FirecrawlApp
+
+# Load environment variables from .env file
+load_dotenv()
 
 console = Console()
 

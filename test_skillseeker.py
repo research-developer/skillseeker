@@ -1,4 +1,4 @@
-"""Tests for the Claude Aggregator"""
+"""Tests for Skillseeker"""
 
 import pytest
 import json
@@ -6,9 +6,9 @@ from dataclasses import asdict
 from unittest.mock import Mock, patch, AsyncMock
 
 import sys
-sys.path.insert(0, "/home/claude/claude-aggregator/src")
+sys.path.insert(0, ".")
 
-from aggregator import (
+from skillseeker import (
     Aggregator,
     Resource,
     ResourceType,
