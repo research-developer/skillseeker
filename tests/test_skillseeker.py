@@ -5,8 +5,7 @@ import json
 from dataclasses import asdict
 from unittest.mock import Mock, patch, AsyncMock
 
-import sys
-sys.path.insert(0, ".")
+
 
 from skillseeker import (
     Aggregator,
