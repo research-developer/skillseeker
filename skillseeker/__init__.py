@@ -1,4 +1,4 @@
-"""Claude Skills/MCP Aggregator - Search across multiple marketplaces"""
+"""Skillseeker - Search across multiple Claude skill and MCP marketplaces"""
 
 from .skillseeker import (
     Aggregator,
@@ -6,10 +6,6 @@ from .skillseeker import (
     ResourceType,
     Source,
     cli,
-    SKILLSMP_SCHEMA,
-    CLAUDE_PLUGINS_SCHEMA,
-    MCP_SCHEMA,
-    MARKETPLACE_SCHEMA,
 )
 
 __version__ = "0.1.0"
@@ -19,8 +15,4 @@ __all__ = [
     "ResourceType",
     "Source",
     "cli",
-    "SKILLSMP_SCHEMA",
-    "CLAUDE_PLUGINS_SCHEMA",
-    "MCP_SCHEMA",
-    "MARKETPLACE_SCHEMA",
 ]
