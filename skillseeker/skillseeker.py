@@ -934,20 +934,25 @@ def install(sources, global_install, name, dry_run):
 
     # Multiple sources: install each one
     if len(sources) > 1:
-        success_count = 0
-        fail_count = 0
 
-        for i, source in enumerate(sources):
-            console.print(f"\n[cyan]Installing ({i+1}/{len(sources)}): {source}[/cyan]")
-            try:
-                # Only apply name override to first source
-                name_override = name if i == 0 else None
-                asyncio.run(do_single_install(source, global_install, name_override, dry_run))
-                success_count += 1
-            except Exception as e:
-                console.print(f"[red]Failed to install {source}: {e}[/red]")
-                fail_count += 1
+        async def _install_multiple_sources():
+            success_count = 0
+            fail_count = 0
 
+            for i, source in enumerate(sources):
+                console.print(f"\n[cyan]Installing ({i+1}/{len(sources)}): {source}[/cyan]")
+                try:
+                    # Only apply name override to first source
+                    name_override = name if i == 0 else None
+                    await do_single_install(source, global_install, name_override, dry_run)
+                    success_count += 1
+                except Exception as e:
+                    console.print(f"[red]Failed to install {source}: {e}[/red]")
+                    fail_count += 1
+
+            return success_count, fail_count
+
+        success_count, fail_count = asyncio.run(_install_multiple_sources())
         console.print(f"\n[bold]Installation complete:[/bold]")
         console.print(f"  [green]✓ Succeeded: {success_count}[/green]")
         if fail_count:
