@@ -449,21 +449,29 @@ def interactive_select(results: list[Resource], global_install: bool = False) ->
         install_multiple_resources(identifiers, global_install)
 
 
-def install_multiple_resources(sources: list[str], global_install: bool = False) -> None:
-    """Install multiple resources."""
+async def _install_multiple_resources_async(sources: list[str], global_install: bool = False) -> tuple[int, int]:
+    """Async helper to install multiple resources within a single event loop."""
     success_count = 0
     fail_count = 0
 
     for source in sources:
         console.print(f"\n[cyan]Installing: {source}[/cyan]")
         try:
-            # Call the install logic directly
-            asyncio.run(do_single_install(source, global_install, name_override=None, dry_run=False))
+            # Call the install logic directly within the same event loop
+            await do_single_install(source, global_install, name_override=None, dry_run=False)
             success_count += 1
         except Exception as e:
             console.print(f"[red]Failed to install {source}: {e}[/red]")
             fail_count += 1
 
+    return success_count, fail_count
+
+
+def install_multiple_resources(sources: list[str], global_install: bool = False) -> None:
+    """Install multiple resources."""
+    success_count, fail_count = asyncio.run(
+        _install_multiple_resources_async(sources, global_install)
+    )
     console.print(f"\n[bold]Installation complete:[/bold]")
     console.print(f"  [green]✓ Succeeded: {success_count}[/green]")
     if fail_count:
