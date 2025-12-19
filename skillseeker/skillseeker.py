@@ -591,8 +591,20 @@ description: {skill_data.description}
         install_path.mkdir(parents=True, exist_ok=True)
         skill_file = install_path / "SKILL.md"
 
+        # Allow non-interactive/batch installs to skip overwrite prompts
+        assume_yes = os.environ.get("SKILLSEEKER_ASSUME_YES", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+            "all",
+        }
+
         if skill_file.exists():
-            if not Confirm.ask(f"[yellow]Skill already exists at {skill_file}. Overwrite?[/yellow]"):
+            if not assume_yes and not Confirm.ask(
+                f"[yellow]Skill already exists at {skill_file}. Overwrite?[/yellow]"
+            ):
                 console.print("[dim]Installation cancelled[/dim]")
                 return
 
