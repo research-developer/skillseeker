@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -17,6 +18,7 @@ from urllib.parse import urlparse
 
 import click
 import httpx
+import questionary
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
@@ -24,6 +26,12 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.prompt import Confirm
 from rich import box
+
+try:
+    import pyperclip
+    HAS_PYPERCLIP = True
+except ImportError:
+    HAS_PYPERCLIP = False
 
 # Load environment variables from .env file
 load_dotenv()
@@ -321,6 +329,269 @@ class Aggregator:
         await self.smithery.close()
 
 
+def copy_to_clipboard(text: str) -> bool:
+    """Copy text to clipboard, with fallback to pbcopy/xclip."""
+    if HAS_PYPERCLIP:
+        try:
+            pyperclip.copy(text)
+            return True
+        except Exception:
+            pass
+
+    # Fallback to system commands
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["pbcopy"], input=text.encode(), check=True)
+            return True
+        elif sys.platform.startswith("linux"):
+            subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode(), check=True)
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def get_installable_identifier(resource: Resource) -> str:
+    """Get the best identifier for installing a resource."""
+    # For skills from SkillsMP, prefer github_url, then name
+    if resource.source == Source.SKILLSMP.value:
+        if resource.github_url:
+            return resource.github_url
+        return resource.name
+
+    # For Smithery MCP servers, use the install command or URL
+    if resource.source == Source.SMITHERY.value:
+        # Extract qualified name from install command if available
+        if resource.install_command:
+            # "npx @smithery/cli install owner/repo" -> "owner/repo"
+            parts = resource.install_command.split()
+            if len(parts) >= 4:
+                return parts[-1]
+        return resource.url
+
+    return resource.url or resource.name
+
+
+def interactive_select(results: list[Resource], global_install: bool = False) -> None:
+    """Show interactive multi-select menu for search results."""
+    if not results:
+        console.print("[yellow]No results to select from.[/yellow]")
+        return
+
+    # Build choices for questionary
+    choices = []
+    for i, r in enumerate(results[:50]):  # Limit to 50 for usability
+        stars = f"⭐{r.stars}" if r.stars else ""
+        source_tag = f"[{r.source}]"
+        desc = r.description[:40] + "..." if len(r.description) > 40 else r.description
+        label = f"{r.name} {stars} {source_tag} - {desc}"
+        choices.append(questionary.Choice(title=label, value=i))
+
+    # Show multi-select
+    console.print("\n[bold cyan]Select resources to install:[/bold cyan]")
+    console.print("[dim]Use arrow keys to navigate, Space to select, Enter to confirm[/dim]\n")
+
+    selected_indices = questionary.checkbox(
+        "Select resources:",
+        choices=choices,
+        instruction="(Space to select, Enter to confirm)",
+    ).ask()
+
+    if not selected_indices:
+        console.print("[dim]No items selected.[/dim]")
+        return
+
+    selected_resources = [results[i] for i in selected_indices]
+
+    # Show what was selected
+    console.print(f"\n[green]Selected {len(selected_resources)} item(s):[/green]")
+    for r in selected_resources:
+        console.print(f"  • {r.name} ({r.source})")
+
+    # Ask what to do with selection
+    action = questionary.select(
+        "\nWhat would you like to do?",
+        choices=[
+            questionary.Choice("Install selected items now", value="install"),
+            questionary.Choice("Copy install identifiers to clipboard", value="copy"),
+            questionary.Choice("Show install commands", value="show"),
+            questionary.Choice("Cancel", value="cancel"),
+        ],
+    ).ask()
+
+    if action == "cancel" or action is None:
+        console.print("[dim]Cancelled.[/dim]")
+        return
+
+    # Get installable identifiers
+    identifiers = [get_installable_identifier(r) for r in selected_resources]
+
+    if action == "copy":
+        # Format for pasting after "skillseeker install"
+        clipboard_text = " ".join(f'"{i}"' if " " in i else i for i in identifiers)
+        if copy_to_clipboard(clipboard_text):
+            console.print(f"\n[green]✓ Copied to clipboard![/green]")
+            console.print(f"[dim]Paste after: skillseeker install[/dim]")
+            console.print(f"[cyan]{clipboard_text}[/cyan]")
+        else:
+            console.print("\n[yellow]Could not copy to clipboard. Here are the identifiers:[/yellow]")
+            console.print(f"[cyan]{clipboard_text}[/cyan]")
+
+    elif action == "show":
+        console.print("\n[bold]Install commands:[/bold]")
+        location = "--global" if global_install else ""
+        for ident in identifiers:
+            console.print(f"  skillseeker install {location} {ident}".strip())
+
+    elif action == "install":
+        console.print("\n[bold]Installing selected items...[/bold]\n")
+        install_multiple_resources(identifiers, global_install)
+
+
+def install_multiple_resources(sources: list[str], global_install: bool = False) -> None:
+    """Install multiple resources."""
+    success_count = 0
+    fail_count = 0
+
+    for source in sources:
+        console.print(f"\n[cyan]Installing: {source}[/cyan]")
+        try:
+            # Call the install logic directly
+            asyncio.run(do_single_install(source, global_install, name_override=None, dry_run=False))
+            success_count += 1
+        except Exception as e:
+            console.print(f"[red]Failed to install {source}: {e}[/red]")
+            fail_count += 1
+
+    console.print(f"\n[bold]Installation complete:[/bold]")
+    console.print(f"  [green]✓ Succeeded: {success_count}[/green]")
+    if fail_count:
+        console.print(f"  [red]✗ Failed: {fail_count}[/red]")
+
+
+async def do_single_install(source: str, global_install: bool, name_override: Optional[str], dry_run: bool) -> None:
+    """Core install logic for a single source."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        content = None
+        skill_name = name_override
+        source_type = "unknown"
+
+        # Determine source type
+        if source.startswith("http://") or source.startswith("https://"):
+            if "github.com" in source or "raw.githubusercontent.com" in source:
+                source_type = "github"
+                console.print(f"[dim]Fetching from GitHub: {source}[/dim]")
+                try:
+                    content, filename = await fetch_github_content(source, client)
+                    if not skill_name:
+                        skill_name = extract_skill_name_from_content(content)
+                        if not skill_name:
+                            skill_name = extract_skill_name_from_url(source)
+                except httpx.HTTPStatusError as e:
+                    raise Exception(f"Error fetching from GitHub: {e}")
+            else:
+                raise Exception(f"Unsupported URL: {source}")
+        else:
+            # Assume SkillsMP skill ID
+            source_type = "skillsmp"
+            api_key = os.environ.get("SKILLSMP_API_KEY")
+            if not api_key:
+                raise Exception("SkillsMP API key required. Set SKILLSMP_API_KEY in .env")
+
+            console.print(f"[dim]Fetching from SkillsMP: {source}[/dim]")
+            # Search for the skill
+            search_client = SkillsmpClient(api_key)
+            results = await search_client.search(source, use_ai=False)
+            await search_client.close()
+
+            if not results:
+                raise Exception(f"Skill not found: {source}")
+
+            # Find exact match or first result
+            skill_data = None
+            for r in results:
+                if r.name == source or source in r.name:
+                    skill_data = r
+                    break
+            if not skill_data:
+                skill_data = results[0]
+
+            if not skill_name:
+                skill_name = skill_data.name
+
+            # If we have a GitHub URL, fetch from there
+            if skill_data.github_url:
+                console.print(f"[dim]Found GitHub URL: {skill_data.github_url}[/dim]")
+                try:
+                    content, _ = await fetch_github_content(skill_data.github_url, client)
+                except Exception:
+                    pass
+
+            # If no content yet, create a basic SKILL.md from the data
+            if not content:
+                content = f"""---
+name: {skill_data.name}
+description: {skill_data.description}
+---
+
+# {skill_data.name}
+
+{skill_data.description}
+
+## Source
+
+- **Author**: {skill_data.author or 'Unknown'}
+- **SkillsMP**: {skill_data.url}
+"""
+                if skill_data.github_url:
+                    content += f"- **GitHub**: {skill_data.github_url}\n"
+
+        if not content:
+            raise Exception("Could not fetch skill content")
+
+        if not skill_name:
+            raise Exception("Could not determine skill name. Use --name to specify.")
+
+        # Sanitize skill name
+        skill_name = re.sub(r'[^a-z0-9-]', '-', skill_name.lower())
+        skill_name = re.sub(r'-+', '-', skill_name).strip('-')
+
+        install_path = get_skill_install_path(skill_name, global_install)
+        location = "global (~/.claude/skills)" if global_install else "local (.claude/skills)"
+
+        if dry_run:
+            console.print(Panel.fit(
+                f"[bold]Skill:[/bold] {skill_name}\n"
+                f"[bold]Source:[/bold] {source_type}\n"
+                f"[bold]Location:[/bold] {location}\n"
+                f"[bold]Path:[/bold] {install_path}\n\n"
+                f"[dim]Content preview (first 500 chars):[/dim]\n"
+                f"{content[:500]}...",
+                title="Dry Run - Would Install"
+            ))
+            return
+
+        # Create directory and write SKILL.md
+        install_path.mkdir(parents=True, exist_ok=True)
+        skill_file = install_path / "SKILL.md"
+
+        if skill_file.exists():
+            if not Confirm.ask(f"[yellow]Skill already exists at {skill_file}. Overwrite?[/yellow]"):
+                console.print("[dim]Installation cancelled[/dim]")
+                return
+
+        skill_file.write_text(content)
+
+        console.print(Panel.fit(
+            f"[green]✓ Installed successfully![/green]\n\n"
+            f"[bold]Skill:[/bold] {skill_name}\n"
+            f"[bold]Location:[/bold] {install_path}\n\n"
+            f"[dim]Claude Code will automatically discover this skill.[/dim]",
+            title="Skill Installed"
+        ))
+
+
 def display_results(results: list[Resource], output_format: str = "table"):
     """Display results in various formats."""
     if not results:
@@ -394,8 +665,10 @@ def cli(ctx):
 @click.option("--sort", type=click.Choice(["stars", "downloads", "name"]), default="stars", help="Sort by field")
 @click.option("-f", "--format", "output_format", type=click.Choice(["table", "json", "simple"]), default="table", help="Output format")
 @click.option("-o", "--output", type=click.Path(), help="Save results to file")
+@click.option("-i", "--interactive", "interactive_mode", is_flag=True, help="Interactive mode: select results to install/copy")
+@click.option("-g", "--global", "global_install", is_flag=True, help="Install globally (used with --interactive)")
 @click.pass_context
-def search(ctx, query, source, resource_type, min_stars, min_downloads, category, author, sort, output_format, output):
+def search(ctx, query, source, resource_type, min_stars, min_downloads, category, author, sort, output_format, output, interactive_mode, global_install):
     """Search and aggregate Claude skills, plugins, and MCP servers"""
     sources = [Source(s) for s in source]
     rtype = ResourceType(resource_type) if resource_type else None
@@ -449,6 +722,12 @@ def search(ctx, query, source, resource_type, min_stars, min_downloads, category
         with open(output, "w") as f:
             json.dump(output_data, f, indent=2, default=str)
         console.print(f"[green]Saved {len(results)} results to {output}[/green]")
+    elif interactive_mode:
+        # Show results first, then interactive selection
+        display_results(results, output_format)
+        console.print(f"\n[dim]Found {len(results)} resources[/dim]")
+        interactive_select(results, global_install)
+        return
     else:
         display_results(results, output_format)
 
@@ -632,23 +911,53 @@ def extract_skill_name_from_url(url: str) -> str:
 
 
 @cli.command()
-@click.argument("source")
+@click.argument("sources", nargs=-1, required=True)
 @click.option("-g", "--global", "global_install", is_flag=True, help="Install globally to ~/.claude/skills/")
-@click.option("-n", "--name", help="Override the skill name (directory name)")
+@click.option("-n", "--name", help="Override the skill name (only works with single source)")
 @click.option("--dry-run", is_flag=True, help="Show what would be installed without installing")
-def install(source, global_install, name, dry_run):
+def install(sources, global_install, name, dry_run):
     """
-    Install a skill from a GitHub URL or SkillsMP.
+    Install skill(s) from GitHub URLs or SkillsMP.
 
-    SOURCE can be:
-    - A GitHub URL (https://github.com/owner/repo or path to SKILL.md)
-    - A SkillsMP skill ID (e.g., "zenobi-us/postgres-pro")
+    SOURCES can be one or more of:
+    - GitHub URLs (https://github.com/owner/repo or path to SKILL.md)
+    - SkillsMP skill IDs (e.g., "zenobi-us/postgres-pro")
 
     Examples:
         skillseeker install https://github.com/user/repo
         skillseeker install https://github.com/user/repo/tree/main/skills/my-skill
         skillseeker install zenobi-us/postgres-pro --global
+        skillseeker install skill1 skill2 skill3  # Install multiple
     """
+    # Handle --name with multiple sources
+    if name and len(sources) > 1:
+        console.print("[yellow]Warning: --name only applies to the first source when installing multiple.[/yellow]")
+
+    # Multiple sources: install each one
+    if len(sources) > 1:
+        success_count = 0
+        fail_count = 0
+
+        for i, source in enumerate(sources):
+            console.print(f"\n[cyan]Installing ({i+1}/{len(sources)}): {source}[/cyan]")
+            try:
+                # Only apply name override to first source
+                name_override = name if i == 0 else None
+                asyncio.run(do_single_install(source, global_install, name_override, dry_run))
+                success_count += 1
+            except Exception as e:
+                console.print(f"[red]Failed to install {source}: {e}[/red]")
+                fail_count += 1
+
+        console.print(f"\n[bold]Installation complete:[/bold]")
+        console.print(f"  [green]✓ Succeeded: {success_count}[/green]")
+        if fail_count:
+            console.print(f"  [red]✗ Failed: {fail_count}[/red]")
+        return
+
+    # Single source: use original inline logic for better UX
+    source = sources[0]
+
     async def do_install():
         async with httpx.AsyncClient(timeout=30.0) as client:
             content = None
