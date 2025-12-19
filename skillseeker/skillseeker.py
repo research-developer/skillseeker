@@ -36,8 +36,14 @@ class Verbosity(str, Enum):
 
 VERBOSITY_ORDER = {Verbosity.INFO: 0, Verbosity.WARNING: 1, Verbosity.ERROR: 2}
 _current_verbosity = Verbosity.INFO
-WARNING_PATTERNS = (re.compile(r"\[yellow\]"), re.compile(r"\bwarning\b"))
-ERROR_PATTERNS = (re.compile(r"\[red\]"), re.compile(r"\berror\b"))
+WARNING_PATTERNS = (
+    re.compile(r"\[yellow\]", re.IGNORECASE),
+    re.compile(r"\bwarning\b", re.IGNORECASE),
+)
+ERROR_PATTERNS = (
+    re.compile(r"\[red\]", re.IGNORECASE),
+    re.compile(r"\berror\b", re.IGNORECASE),
+)
 
 
 def set_verbosity(level: Verbosity | str):
@@ -65,16 +71,18 @@ def infer_verbosity(args, kwargs) -> Verbosity:
     refactoring each site.
     """
     explicit = kwargs.get("_verbosity")
-    if explicit:
-        return Verbosity(explicit)
+    if explicit is not None:
+        try:
+            return Verbosity(explicit)
+        except ValueError:
+            return Verbosity.INFO
 
     if args:
         first = args[0]
         if isinstance(first, str):
-            lower = first.lower()
-            if any(pattern.search(lower) for pattern in ERROR_PATTERNS):
+            if any(pattern.search(first) for pattern in ERROR_PATTERNS):
                 return Verbosity.ERROR
-            if any(pattern.search(lower) for pattern in WARNING_PATTERNS):
+            if any(pattern.search(first) for pattern in WARNING_PATTERNS):
                 return Verbosity.WARNING
 
     return Verbosity.INFO
