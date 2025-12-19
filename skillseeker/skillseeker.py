@@ -49,7 +49,13 @@ ERROR_PATTERNS = (
 def set_verbosity(level: Verbosity | str):
     """Set global verbosity for console output."""
     global _current_verbosity
-    _current_verbosity = Verbosity(level)
+    try:
+        _current_verbosity = Verbosity(level)
+    except ValueError as exc:
+        valid_levels = ", ".join(v.value for v in Verbosity)
+        raise ValueError(
+            f"Invalid verbosity level {level!r}. Expected one of: {valid_levels}"
+        ) from exc
 
 
 def get_verbosity() -> Verbosity:
