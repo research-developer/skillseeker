@@ -475,7 +475,6 @@ async def do_single_install(source: str, global_install: bool, name_override: Op
     async with httpx.AsyncClient(timeout=30.0) as client:
         content = None
         skill_name = name_override
-        source_type = "unknown"
 
         # Determine source type
         if source.startswith("http://") or source.startswith("https://"):
