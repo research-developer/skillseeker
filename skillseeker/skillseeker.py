@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import urlparse
 
 import click
 import httpx
@@ -43,8 +43,6 @@ class ResourceType(str, Enum):
 class Source(str, Enum):
     SKILLSMP = "skillsmp"
     SMITHERY = "smithery"
-    GLAMA = "glama"
-    MCP_SO = "mcp_so"
     ALL = "all"
 
 
@@ -65,41 +63,6 @@ class Resource:
     category: Optional[str] = None
     language: Optional[str] = None
     tags: list = field(default_factory=list)
-
-
-class FirecrawlTracker:
-    """Tracks FireCrawl API usage and prompts for permission when limit exceeded."""
-
-    def __init__(self, limit: int = 10):
-        self.limit = limit
-        self.usage_count = 0
-        self.permission_granted = False
-
-    def can_use(self) -> bool:
-        """Check if we can use FireCrawl (within limit or permission granted)."""
-        if self.limit == 0:  # Unlimited
-            return True
-        if self.usage_count < self.limit:
-            return True
-        return self.permission_granted
-
-    def request_permission(self) -> bool:
-        """Ask user for permission to exceed the limit."""
-        if self.permission_granted:
-            return True
-
-        console.print(f"\n[yellow]FireCrawl usage limit ({self.limit}) reached.[/yellow]")
-        console.print(f"[dim]Current usage: {self.usage_count} requests[/dim]")
-
-        self.permission_granted = Confirm.ask(
-            "Allow additional FireCrawl requests?",
-            default=False
-        )
-        return self.permission_granted
-
-    def increment(self):
-        """Record a FireCrawl API call."""
-        self.usage_count += 1
 
 
 class SkillsmpClient:
@@ -260,233 +223,21 @@ class SmitheryClient:
         await self.client.aclose()
 
 
-class GlamaClient:
-    """Client for Glama MCP Registry API (https://glama.ai/api/mcp/v1)"""
-
-    BASE_URL = "https://glama.ai/api/mcp/v1"
-    SEARCH_URL = "https://glama.ai/mcp/servers"
-
-    def __init__(self):
-        self.client = httpx.AsyncClient(timeout=30.0)
-
-    async def get_server(self, owner: str, repo: str) -> Optional[Resource]:
-        """Get details for a specific MCP server (no auth required)."""
-        url = f"{self.BASE_URL}/servers/{owner}/{repo}"
-
-        try:
-            response = await self.client.get(url)
-            response.raise_for_status()
-            server = response.json()
-
-            return Resource(
-                name=server.get("name", f"{owner}/{repo}"),
-                description=server.get("description", ""),
-                type=ResourceType.MCP_SERVER.value,
-                source=Source.GLAMA.value,
-                url=f"https://glama.ai/mcp/servers/@{owner}/{repo}",
-                author=owner,
-                github_url=server.get("repository"),
-                stars=server.get("stars"),
-                install_command=server.get("installCommand"),
-                category=server.get("category"),
-                language=server.get("language"),
-                tags=server.get("tags", [])
-            )
-
-        except Exception:
-            return None
-
-    async def search_via_scrape(
-        self,
-        query: str,
-        firecrawl_app,
-        tracker: FirecrawlTracker
-    ) -> list[Resource]:
-        """
-        Search Glama using FireCrawl (no public search API).
-        Falls back to scraping since Glama doesn't expose a search endpoint.
-        """
-        if not tracker.can_use():
-            if not tracker.request_permission():
-                console.print("[dim]Skipping Glama (FireCrawl limit reached)[/dim]")
-                return []
-
-        url = f"{self.SEARCH_URL}?query={quote_plus(query)}"
-
-        try:
-            tracker.increment()
-            result = firecrawl_app.extract(
-                urls=[url],
-                prompt="Extract all MCP servers listed. For each server get: name, description, author/owner, GitHub URL, stars, category, and install command.",
-                schema={
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "description": {"type": "string"},
-                            "author": {"type": "string"},
-                            "github_url": {"type": "string"},
-                            "stars": {"type": "integer"},
-                            "category": {"type": "string"},
-                            "install_command": {"type": "string"},
-                        },
-                        "required": ["name", "description"]
-                    }
-                }
-            )
-
-            resources = []
-            items = result.get("data", []) if isinstance(result, dict) else []
-            if isinstance(items, dict):
-                items = items.get("items", [])
-            if not isinstance(items, list):
-                items = [items] if items else []
-
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                resource = Resource(
-                    name=item.get("name", "Unknown"),
-                    description=item.get("description", ""),
-                    type=ResourceType.MCP_SERVER.value,
-                    source=Source.GLAMA.value,
-                    url=f"https://glama.ai/mcp/servers",
-                    author=item.get("author"),
-                    github_url=item.get("github_url"),
-                    stars=item.get("stars"),
-                    install_command=item.get("install_command"),
-                    category=item.get("category"),
-                    tags=[]
-                )
-                resources.append(resource)
-
-            return resources
-
-        except Exception as e:
-            console.print(f"[yellow]Warning: Failed to search Glama: {e}[/yellow]")
-            return []
-
-    async def close(self):
-        await self.client.aclose()
-
-
-class McpSoClient:
-    """Client for mcp.so - uses FireCrawl since no public API."""
-
-    BASE_URL = "https://mcp.so"
-
-    def __init__(self):
-        pass
-
-    async def search_via_scrape(
-        self,
-        query: str,
-        firecrawl_app,
-        tracker: FirecrawlTracker
-    ) -> list[Resource]:
-        """Search mcp.so using FireCrawl scraping."""
-        if not tracker.can_use():
-            if not tracker.request_permission():
-                console.print("[dim]Skipping mcp.so (FireCrawl limit reached)[/dim]")
-                return []
-
-        url = f"{self.BASE_URL}/servers?q={quote_plus(query)}" if query else self.BASE_URL
-
-        try:
-            tracker.increment()
-            result = firecrawl_app.extract(
-                urls=[url],
-                prompt="Extract all MCP servers listed on this page. For each server, get the name, description, author, GitHub URL, stars, category, implementation language, and install command.",
-                schema={
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "description": {"type": "string"},
-                            "author": {"type": "string"},
-                            "github_url": {"type": "string"},
-                            "stars": {"type": "integer"},
-                            "category": {"type": "string"},
-                            "language": {"type": "string"},
-                            "install_command": {"type": "string"},
-                        },
-                        "required": ["name", "description"]
-                    }
-                }
-            )
-
-            resources = []
-            items = result.get("data", []) if isinstance(result, dict) else []
-            if isinstance(items, dict):
-                items = items.get("items", [])
-            if not isinstance(items, list):
-                items = [items] if items else []
-
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                resource = Resource(
-                    name=item.get("name", "Unknown"),
-                    description=item.get("description", ""),
-                    type=ResourceType.MCP_SERVER.value,
-                    source=Source.MCP_SO.value,
-                    url=self.BASE_URL,
-                    author=item.get("author"),
-                    github_url=item.get("github_url"),
-                    stars=item.get("stars"),
-                    install_command=item.get("install_command"),
-                    category=item.get("category"),
-                    language=item.get("language"),
-                    tags=[]
-                )
-                resources.append(resource)
-
-            return resources
-
-        except Exception as e:
-            console.print(f"[yellow]Warning: Failed to search mcp.so: {e}[/yellow]")
-            return []
-
-
 class Aggregator:
     """Main aggregator class that searches and combines resources from multiple sources."""
 
     def __init__(
         self,
-        firecrawl_api_key: Optional[str] = None,
         skillsmp_api_key: Optional[str] = None,
         smithery_api_key: Optional[str] = None,
-        firecrawl_limit: int = 10
     ):
         # API keys
-        self.firecrawl_api_key = firecrawl_api_key or os.environ.get("FIRECRAWL_API_KEY")
         self.skillsmp_api_key = skillsmp_api_key or os.environ.get("SKILLSMP_API_KEY")
         self.smithery_api_key = smithery_api_key or os.environ.get("SMITHERY_API_KEY")
-
-        # FireCrawl setup (for sources without APIs)
-        self.firecrawl_app = None
-        if self.firecrawl_api_key:
-            try:
-                from firecrawl import FirecrawlApp
-                self.firecrawl_app = FirecrawlApp(api_key=self.firecrawl_api_key)
-            except ImportError:
-                console.print("[yellow]Warning: firecrawl-py not installed, some sources unavailable[/yellow]")
-
-        # FireCrawl usage tracking
-        limit = firecrawl_limit
-        try:
-            limit = int(os.environ.get("FIRECRAWL_LIMIT", firecrawl_limit))
-        except ValueError:
-            pass
-        self.firecrawl_tracker = FirecrawlTracker(limit=limit)
 
         # API clients
         self.skillsmp = SkillsmpClient(self.skillsmp_api_key)
         self.smithery = SmitheryClient(self.smithery_api_key)
-        self.glama = GlamaClient()
-        self.mcp_so = McpSoClient()
 
         self.results: list[Resource] = []
 
@@ -495,10 +246,9 @@ class Aggregator:
         if source == Source.SKILLSMP:
             if self.skillsmp_api_key:
                 return await self.skillsmp.search(query or "", use_ai=True)
-            elif self.firecrawl_app:
-                console.print("[dim]SkillsMP: No API key, consider getting one at skillsmp.com/docs/api[/dim]")
+            else:
+                console.print("[dim]SkillsMP: No API key, get one at skillsmp.com/docs/api[/dim]")
                 return []
-            return []
 
         elif source == Source.SMITHERY:
             if self.smithery_api_key:
@@ -506,16 +256,6 @@ class Aggregator:
             else:
                 console.print("[dim]Smithery: No API key, get one at smithery.ai/account/api-keys[/dim]")
                 return []
-
-        elif source == Source.GLAMA:
-            if query and self.firecrawl_app:
-                return await self.glama.search_via_scrape(query, self.firecrawl_app, self.firecrawl_tracker)
-            return []
-
-        elif source == Source.MCP_SO:
-            if self.firecrawl_app:
-                return await self.mcp_so.search_via_scrape(query or "", self.firecrawl_app, self.firecrawl_tracker)
-            return []
 
         return []
 
@@ -579,15 +319,6 @@ class Aggregator:
         """Clean up HTTP clients."""
         await self.skillsmp.close()
         await self.smithery.close()
-        await self.glama.close()
-
-    def get_firecrawl_usage(self) -> dict:
-        """Get FireCrawl usage statistics."""
-        return {
-            "usage": self.firecrawl_tracker.usage_count,
-            "limit": self.firecrawl_tracker.limit,
-            "exceeded": self.firecrawl_tracker.usage_count >= self.firecrawl_tracker.limit if self.firecrawl_tracker.limit > 0 else False
-        }
 
 
 def display_results(results: list[Resource], output_format: str = "table"):
@@ -672,11 +403,10 @@ def search(ctx, query, source, resource_type, min_stars, min_downloads, category
     # Check for at least one usable source
     has_skillsmp = bool(os.environ.get("SKILLSMP_API_KEY"))
     has_smithery = bool(os.environ.get("SMITHERY_API_KEY"))
-    has_firecrawl = bool(os.environ.get("FIRECRAWL_API_KEY"))
 
-    if not (has_skillsmp or has_smithery or has_firecrawl):
+    if not (has_skillsmp or has_smithery):
         console.print("[red]Error: No API keys configured.[/red]")
-        console.print("Set at least one of: SKILLSMP_API_KEY, SMITHERY_API_KEY, or FIRECRAWL_API_KEY")
+        console.print("Set at least one of: SKILLSMP_API_KEY or SMITHERY_API_KEY")
         console.print("See .env.example for configuration options.")
         sys.exit(1)
 
@@ -694,11 +424,6 @@ def search(ctx, query, source, resource_type, min_stars, min_downloads, category
             )
 
             results = aggregator.sort_results(results, by=sort)
-
-            # Show FireCrawl usage if any was used
-            usage = aggregator.get_firecrawl_usage()
-            if usage["usage"] > 0:
-                console.print(f"\n[dim]FireCrawl usage: {usage['usage']}/{usage['limit'] or '∞'} requests[/dim]")
 
             return results
         finally:
@@ -741,7 +466,6 @@ def sources():
 
     has_skillsmp = bool(os.environ.get("SKILLSMP_API_KEY"))
     has_smithery = bool(os.environ.get("SMITHERY_API_KEY"))
-    has_firecrawl = bool(os.environ.get("FIRECRAWL_API_KEY"))
 
     table.add_row(
         "skillsmp",
@@ -754,18 +478,6 @@ def sources():
         "mcp_server",
         "REST API",
         "[green]✓ Ready[/green]" if has_smithery else "[yellow]⚠ No API key[/yellow]"
-    )
-    table.add_row(
-        "glama",
-        "mcp_server",
-        "FireCrawl",
-        "[green]✓ Ready[/green]" if has_firecrawl else "[red]✗ Needs FireCrawl[/red]"
-    )
-    table.add_row(
-        "mcp_so",
-        "mcp_server",
-        "FireCrawl",
-        "[green]✓ Ready[/green]" if has_firecrawl else "[red]✗ Needs FireCrawl[/red]"
     )
 
     console.print(table)
@@ -812,21 +524,6 @@ def schema(output):
 
     console.print(f"[green]Schema exported to {output}[/green]")
     console.print_json(json.dumps(unified_schema, indent=2))
-
-
-@cli.command()
-def usage():
-    """Show current FireCrawl usage limits"""
-    limit = os.environ.get("FIRECRAWL_LIMIT", "10")
-    has_firecrawl = bool(os.environ.get("FIRECRAWL_API_KEY"))
-
-    console.print(Panel.fit(
-        f"[bold]FireCrawl Configuration[/bold]\n\n"
-        f"API Key: {'[green]Configured[/green]' if has_firecrawl else '[red]Not set[/red]'}\n"
-        f"Request Limit: {limit if limit != '0' else 'Unlimited'}\n\n"
-        f"[dim]Set FIRECRAWL_LIMIT in .env to adjust (0 = unlimited)[/dim]",
-        title="Usage Limits"
-    ))
 
 
 def get_skill_install_path(skill_name: str, global_install: bool) -> Path:
