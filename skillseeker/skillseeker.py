@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -20,12 +20,12 @@ import click
 import httpx
 import questionary
 from dotenv import load_dotenv
+from rich import box
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.prompt import Confirm
-from rich import box
+from rich.table import Table
 
 try:
     import pyperclip
@@ -36,7 +36,92 @@ except ImportError:
 # Load environment variables from .env file
 load_dotenv()
 
-console = Console()
+class Verbosity(str, Enum):
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+VERBOSITY_ORDER = {Verbosity.INFO: 0, Verbosity.WARNING: 1, Verbosity.ERROR: 2}
+_current_verbosity = Verbosity.INFO
+WARNING_PATTERNS = (
+    re.compile(r"\[yellow\]", re.IGNORECASE),
+    re.compile(r"\bwarning\b", re.IGNORECASE),
+)
+ERROR_PATTERNS = (
+    re.compile(r"\[red\]", re.IGNORECASE),
+    re.compile(r"\berror\b", re.IGNORECASE),
+)
+
+
+def set_verbosity(level: Verbosity | str):
+    """Set global verbosity for console output."""
+    global _current_verbosity
+    try:
+        _current_verbosity = Verbosity(level)
+    except ValueError as exc:
+        valid_levels = ", ".join(v.value for v in Verbosity)
+        raise ValueError(
+            f"Invalid verbosity level {level!r}. Expected one of: {valid_levels}"
+        ) from exc
+
+
+def get_verbosity() -> Verbosity:
+    """Get the current verbosity level."""
+    return _current_verbosity
+
+
+def _should_log(level: Verbosity) -> bool:
+    return VERBOSITY_ORDER[level] >= VERBOSITY_ORDER[_current_verbosity]
+
+
+def infer_verbosity(args, kwargs) -> Verbosity:
+    """
+    Infer verbosity for a console call.
+
+    Callers can pass `_verbosity` explicitly to avoid the heuristic.
+    Otherwise, we fall back to detecting common Rich color tags or
+    keywords so existing console.print calls keep working without
+    refactoring each site.
+    """
+    explicit = kwargs.get("_verbosity")
+    if explicit is not None:
+        try:
+            return Verbosity(explicit)
+        except ValueError:
+            return Verbosity.INFO
+
+    if args:
+        first = args[0]
+        if isinstance(first, str):
+            for level, patterns in (
+                (Verbosity.ERROR, ERROR_PATTERNS),
+                (Verbosity.WARNING, WARNING_PATTERNS),
+            ):
+                if any(pattern.search(first) for pattern in patterns):
+                    return level
+
+    return Verbosity.INFO
+
+
+class VerboseConsole(Console):
+    """Console that respects global verbosity settings."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._raw_console_print = super().print
+
+    def print(self, *args, **kwargs):
+        level = infer_verbosity(args, kwargs)
+        if "_verbosity" in kwargs:
+            clean_kwargs = {k: v for k, v in kwargs.items() if k != "_verbosity"}
+        else:
+            clean_kwargs = kwargs
+        if _should_log(level):
+            self._raw_console_print(*args, **clean_kwargs)
+
+
+console = VerboseConsole()
 
 
 class ResourceType(str, Enum):
@@ -633,7 +718,12 @@ def display_results(results: list[Resource], output_format: str = "table"):
     if output_format == "simple":
         for r in results:
             console.print(f"[bold cyan]{r.name}[/bold cyan] ({r.type})")
-            console.print(f"  {r.description[:100]}..." if len(r.description) > 100 else f"  {r.description}")
+            desc = (
+                f"  {r.description[:100]}..."
+                if len(r.description) > 100
+                else f"  {r.description}"
+            )
+            console.print(desc)
             if r.github_url:
                 console.print(f"  [link={r.github_url}]{r.github_url}[/link]")
             console.print()
@@ -670,27 +760,65 @@ def display_results(results: list[Resource], output_format: str = "table"):
     console.print(table)
 
     if len(results) > 50:
-        console.print(f"\n[dim]Showing 50 of {len(results)} results. Use --format json for full output.[/dim]")
+        console.print(
+            f"\n[dim]Showing 50 of {len(results)} results. "
+            "Use --format json for full output.[/dim]"
+        )
 
 
 # CLI Commands
 @click.group()
+@click.option(
+    "-v",
+    "--verbosity",
+    type=click.Choice([v.value for v in Verbosity]),
+    default=Verbosity.INFO.value,
+    help="Set output verbosity: info, warning, or error"
+)
 @click.pass_context
-def cli(ctx):
+def cli(ctx, verbosity):
     """Skillseeker - Search across multiple Claude skill and MCP marketplaces"""
     ctx.ensure_object(dict)
+    set_verbosity(verbosity)
+    ctx.obj["verbosity"] = verbosity
 
 
 @cli.command()
 @click.option("-q", "--query", help="Search query")
-@click.option("-s", "--source", type=click.Choice([s.value for s in Source]), multiple=True, default=["all"], help="Sources to search")
-@click.option("-t", "--type", "resource_type", type=click.Choice([t.value for t in ResourceType]), default="all", help="Resource type filter")
+@click.option(
+    "-s",
+    "--source",
+    type=click.Choice([s.value for s in Source]),
+    multiple=True,
+    default=["all"],
+    help="Sources to search",
+)
+@click.option(
+    "-t",
+    "--type",
+    "resource_type",
+    type=click.Choice([t.value for t in ResourceType]),
+    default="all",
+    help="Resource type filter",
+)
 @click.option("--min-stars", type=int, help="Minimum GitHub stars")
 @click.option("--min-downloads", type=int, help="Minimum downloads")
 @click.option("-c", "--category", help="Category filter")
 @click.option("-a", "--author", help="Author filter")
-@click.option("--sort", type=click.Choice(["stars", "downloads", "name"]), default="stars", help="Sort by field")
-@click.option("-f", "--format", "output_format", type=click.Choice(["table", "json", "simple"]), default="table", help="Output format")
+@click.option(
+    "--sort",
+    type=click.Choice(["stars", "downloads", "name"]),
+    default="stars",
+    help="Sort by field",
+)
+@click.option(
+    "-f",
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "json", "simple"]),
+    default="table",
+    help="Output format",
+)
 @click.option("-o", "--output", type=click.Path(), help="Save results to file")
 @click.option("-i", "--interactive", "interactive_mode", is_flag=True, help="Interactive mode: select results to install/copy")
 @click.option("-g", "--global", "global_install", is_flag=True, help="Install globally (used with --interactive)")
@@ -1013,7 +1141,10 @@ def install(sources, global_install, name, dry_run):
                         return
                 else:
                     console.print(f"[red]Unsupported URL: {source}[/red]")
-                    console.print("Supported: GitHub URLs (github.com, raw.githubusercontent.com)")
+                    console.print(
+                        "Supported: GitHub URLs (github.com, raw.githubusercontent.com)",
+                        _verbosity=Verbosity.ERROR,
+                    )
                     return
             else:
                 # Assume SkillsMP skill ID
@@ -1156,7 +1287,11 @@ def installed(global_only, local_only):
                     match = re.match(r'^---\s*\n(.*?)\n---', content, re.DOTALL)
                     if match:
                         frontmatter = match.group(1)
-                        desc_match = re.search(r'^description:\s*["\']?([^"\'\n]+)', frontmatter, re.MULTILINE)
+                        desc_match = re.search(
+                            r'^description:\s*["\']?([^"\'\n]+)',
+                            frontmatter,
+                            re.MULTILINE,
+                        )
                         if desc_match:
                             desc = desc_match.group(1).strip()[:50]
                     table.add_row(skill_dir.name, location, desc or "[dim]No description[/dim]")
@@ -1187,7 +1322,7 @@ def uninstall(skill_name, global_install, yes):
 
     if not install_path.exists():
         console.print(f"[yellow]Skill '{skill_name}' not found in {location} location.[/yellow]")
-        console.print(f"[dim]Path: {install_path}[/dim]")
+        console.print(f"[dim]Path: {install_path}[/dim]", _verbosity=Verbosity.WARNING)
         return
 
     if not yes:
@@ -1197,6 +1332,236 @@ def uninstall(skill_name, global_install, yes):
 
     shutil.rmtree(install_path)
     console.print(f"[green]✓ Uninstalled '{skill_name}' from {location}[/green]")
+
+
+async def fetch_unresolved_comments(
+    owner: str, repo: str, pr_number: int, github_token: str
+) -> list[dict]:
+    """Fetch unresolved review comments from a GitHub pull request."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {github_token}",
+            "X-GitHub-Api-Version": "2022-11-28"
+        }
+
+        # Fetch review comments with the comfort-fade preview to get resolved status
+        # https://docs.github.com/en/rest/pulls/comments
+        headers["Accept"] = "application/vnd.github.comfort-fade-preview+json"
+
+        url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/comments"
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        comments = response.json()
+
+        # Filter for top-level, unresolved comments
+        # A comment is unresolved if:
+        # 1. It's a top-level comment (in_reply_to_id is None)
+        # 2. It's not marked as resolved (GitHub API comfort-fade preview)
+        unresolved = []
+        for comment in comments:
+            # Only include top-level comments (thread starters)
+            if comment.get("in_reply_to_id") is None:
+                # Check if the thread is resolved
+                # The API may not always include this field, so we treat missing as unresolved
+                if not comment.get("resolved", False):
+                    unresolved.append(comment)
+
+        return unresolved
+
+
+async def create_github_issue(
+    owner: str, repo: str, title: str, body: str, github_token: str
+) -> dict:
+    """Create a GitHub issue."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {github_token}",
+            "X-GitHub-Api-Version": "2022-11-28"
+        }
+
+        url = f"https://api.github.com/repos/{owner}/{repo}/issues"
+        data = {
+            "title": title,
+            "body": body
+        }
+
+        response = await client.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        return response.json()
+
+
+def format_comments_as_issue(comments: list[dict], pr_number: int, pr_url: str) -> tuple[str, str]:
+    """Format unresolved comments into an issue title and body."""
+    title = f"Unresolved comments from PR #{pr_number}"
+
+    body_parts = [
+        f"This issue aggregates unresolved review comments from PR #{pr_number}",
+        f"PR URL: {pr_url}",
+        "",
+        "## Unresolved Comments",
+        ""
+    ]
+
+    for i, comment in enumerate(comments, 1):
+        author = comment.get("user", {}).get("login", "unknown")
+        path = comment.get("path", "unknown file")
+        line = comment.get("line") or comment.get("original_line", "?")
+        body = comment.get("body", "")
+        comment_url = comment.get("html_url", "")
+
+        body_parts.append(f"### Comment {i}")
+        body_parts.append(f"**File:** `{path}:{line}`")
+        body_parts.append(f"**Author:** @{author}")
+        body_parts.append(f"**Link:** {comment_url}")
+        body_parts.append("")
+        body_parts.append(body)
+        body_parts.append("")
+        body_parts.append("---")
+        body_parts.append("")
+
+    return title, "\n".join(body_parts)
+
+
+def parse_pr_identifier(pr_input: str) -> tuple[Optional[str], Optional[str], Optional[int]]:
+    """
+    Parse PR identifier from various formats:
+    - Full URL: https://github.com/owner/repo/pull/123
+    - Short format: owner/repo#123
+    - Just number: 123 (requires repo context from git)
+
+    Returns (owner, repo, pr_number)
+    """
+    # Try parsing as URL
+    if pr_input.startswith("http://") or pr_input.startswith("https://"):
+        match = re.match(r'https?://github\.com/([^/]+)/([^/]+)/pull/(\d+)', pr_input)
+        if match:
+            return match.group(1), match.group(2), int(match.group(3))
+
+    # Try parsing as owner/repo#123
+    match = re.match(r'([^/]+)/([^#]+)#(\d+)', pr_input)
+    if match:
+        return match.group(1), match.group(2), int(match.group(3))
+
+    # Try parsing as just a number
+    if pr_input.isdigit():
+        return None, None, int(pr_input)
+
+    return None, None, None
+
+
+def get_repo_from_git() -> tuple[Optional[str], Optional[str]]:
+    """Extract owner/repo from git remote."""
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        remote_url = result.stdout.strip()
+
+        # Parse git@github.com:owner/repo.git or https://github.com/owner/repo.git
+        match = re.search(r'github\.com[:/]([^/]+)/([^/\.]+)', remote_url)
+        if match:
+            return match.group(1), match.group(2)
+    except Exception:
+        pass
+
+    return None, None
+
+
+@cli.command()
+@click.argument("pr_identifier")
+@click.option("--token", help="GitHub personal access token (or set GITHUB_TOKEN env var)")
+@click.option("--dry-run", is_flag=True, help="Show what would be created without creating")
+def create_issue(pr_identifier, token, dry_run):
+    """
+    Create a GitHub issue from unresolved PR review comments.
+
+    PR_IDENTIFIER can be:
+    - Full URL: https://github.com/owner/repo/pull/123
+    - Short format: owner/repo#123
+    - Just number: 123 (uses current git repo)
+
+    Examples:
+        skillseeker create-issue https://github.com/owner/repo/pull/123
+        skillseeker create-issue owner/repo#123
+        skillseeker create-issue 123
+    """
+    github_token = token or os.environ.get("GITHUB_TOKEN")
+    if not github_token:
+        console.print("[red]Error: GitHub token required.[/red]")
+        console.print(
+            "Set GITHUB_TOKEN environment variable or use --token option",
+            _verbosity=Verbosity.ERROR,
+        )
+        sys.exit(1)
+
+    # Parse PR identifier
+    owner, repo, pr_number = parse_pr_identifier(pr_identifier)
+
+    # If owner/repo not provided, try to get from git
+    if not owner or not repo:
+        git_owner, git_repo = get_repo_from_git()
+        owner = owner or git_owner
+        repo = repo or git_repo
+
+    if not owner or not repo or not pr_number:
+        console.print("[red]Error: Could not parse PR identifier.[/red]")
+        console.print(
+            "Expected format: https://github.com/owner/repo/pull/123, owner/repo#123, or 123",
+            _verbosity=Verbosity.ERROR,
+        )
+        sys.exit(1)
+
+    pr_url = f"https://github.com/{owner}/{repo}/pull/{pr_number}"
+    console.print(f"[dim]Fetching unresolved comments from {pr_url}...[/dim]")
+
+    async def run():
+        try:
+            # Fetch unresolved comments
+            comments = await fetch_unresolved_comments(owner, repo, pr_number, github_token)
+
+            if not comments:
+                console.print("[yellow]No unresolved comments found.[/yellow]")
+                return
+
+            console.print(f"[green]Found {len(comments)} unresolved comment(s)[/green]")
+
+            # Format as issue
+            title, body = format_comments_as_issue(comments, pr_number, pr_url)
+
+            if dry_run:
+                console.print(Panel.fit(
+                    f"[bold]Title:[/bold]\n{title}\n\n"
+                    f"[bold]Body:[/bold]\n{body[:500]}...",
+                    title="Dry Run - Would Create Issue"
+                ))
+                return
+
+            # Create issue
+            console.print("[dim]Creating issue...[/dim]")
+            issue = await create_github_issue(owner, repo, title, body, github_token)
+
+            console.print(Panel.fit(
+                f"[green]✓ Issue created successfully![/green]\n\n"
+                f"[bold]Issue:[/bold] #{issue['number']}\n"
+                f"[bold]Title:[/bold] {issue['title']}\n"
+                f"[bold]URL:[/bold] {issue['html_url']}",
+                title="Issue Created"
+            ))
+
+        except httpx.HTTPStatusError as e:
+            console.print(f"[red]GitHub API error: {e.response.status_code}[/red]")
+            console.print(f"[red]{e.response.text}[/red]", _verbosity=Verbosity.ERROR)
+            sys.exit(1)
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            sys.exit(1)
+
+    asyncio.run(run())
 
 
 if __name__ == "__main__":

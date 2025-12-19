@@ -10,6 +10,7 @@ A CLI tool that aggregates Claude skills, plugins, agents, and MCP servers from 
 - **Unified schema**: Normalizes data from different sources into a consistent format
 - **Powerful filtering**: Filter by type, stars, downloads, category, author
 - **Multiple output formats**: Table, JSON, or simple text
+- **GitHub integration**: Create issues from unresolved PR review comments
 
 ## Installation
 
@@ -61,6 +62,9 @@ skillseeker search -s smithery -q "postgres"
 
 # Search without query (browse all)
 skillseeker search -s smithery
+
+# Increase or reduce output verbosity (info, warning, error)
+skillseeker --verbosity warning search -q "database"
 ```
 
 ### Filtering
@@ -150,6 +154,23 @@ skillseeker uninstall my-skill --global
 
 # Uninstall without confirmation
 skillseeker uninstall my-skill -y
+```
+
+### GitHub Integration
+
+```bash
+# Create a GitHub issue from unresolved PR comments
+skillseeker create-issue https://github.com/owner/repo/pull/123 --token YOUR_TOKEN
+
+# Or use environment variable for token
+export GITHUB_TOKEN=your_token_here
+skillseeker create-issue owner/repo#123
+
+# Use PR number from current repo
+skillseeker create-issue 123
+
+# Preview without creating
+skillseeker create-issue 123 --dry-run
 ```
 
 ### Utility Commands
