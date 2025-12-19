@@ -15,10 +15,8 @@ from skillseeker import (
 )
 from skillseeker import Verbosity, get_verbosity, set_verbosity
 from skillseeker.skillseeker import (
-    FirecrawlTracker,
     SkillsmpClient,
     SmitheryClient,
-    GlamaClient,
 )
 
 
@@ -42,8 +40,8 @@ class TestResource:
             name="complete-skill",
             description="Full skill",
             type="mcp_server",
-            source="mcp_so",
-            url="https://mcp.so/server/1",
+            source="smithery",
+            url="https://smithery.ai/server/1",
             author="@anthropic",
             github_url="https://github.com/anthropic/server",
             stars=1500,
@@ -89,45 +87,11 @@ class TestSources:
     def test_all_sources_exist(self):
         assert Source.SKILLSMP.value == "skillsmp"
         assert Source.SMITHERY.value == "smithery"
-        assert Source.GLAMA.value == "glama"
-        assert Source.MCP_SO.value == "mcp_so"
         assert Source.ALL.value == "all"
 
-
-class TestFirecrawlTracker:
-    """Test FireCrawl usage tracking"""
-
-    def test_tracker_init(self):
-        tracker = FirecrawlTracker(limit=5)
-        assert tracker.limit == 5
-        assert tracker.usage_count == 0
-        assert tracker.permission_granted is False
-
-    def test_can_use_within_limit(self):
-        tracker = FirecrawlTracker(limit=5)
-        assert tracker.can_use() is True
-        tracker.increment()
-        tracker.increment()
-        assert tracker.can_use() is True
-
-    def test_can_use_at_limit(self):
-        tracker = FirecrawlTracker(limit=2)
-        tracker.increment()
-        tracker.increment()
-        assert tracker.can_use() is False
-
-    def test_unlimited_mode(self):
-        tracker = FirecrawlTracker(limit=0)
-        for _ in range(100):
-            tracker.increment()
-        assert tracker.can_use() is True
-
-    def test_permission_allows_continued_use(self):
-        tracker = FirecrawlTracker(limit=1)
-        tracker.increment()
-        assert tracker.can_use() is False
-        tracker.permission_granted = True
-        assert tracker.can_use() is True
+    def test_source_count(self):
+        # Only 3 sources now: skillsmp, smithery, all
+        assert len(Source) == 3
 
 
 class TestVerbosityControls:
@@ -187,28 +151,25 @@ class TestAggregator:
     def test_init_without_api_keys(self):
         with patch.dict(os.environ, {}, clear=True):
             agg = Aggregator()
-            assert agg.firecrawl_app is None
             assert agg.skillsmp_api_key is None
             assert agg.smithery_api_key is None
 
     def test_init_with_env_keys(self):
         with patch.dict(os.environ, {
-            "FIRECRAWL_API_KEY": "fc-key",
             "SKILLSMP_API_KEY": "sm-key",
             "SMITHERY_API_KEY": "st-key"
         }):
             agg = Aggregator()
-            assert agg.firecrawl_api_key == "fc-key"
             assert agg.skillsmp_api_key == "sm-key"
             assert agg.smithery_api_key == "st-key"
 
     def test_init_with_direct_keys(self):
         agg = Aggregator(
-            firecrawl_api_key="fc-direct",
-            skillsmp_api_key="sm-direct"
+            skillsmp_api_key="sm-direct",
+            smithery_api_key="st-direct"
         )
-        assert agg.firecrawl_api_key == "fc-direct"
         assert agg.skillsmp_api_key == "sm-direct"
+        assert agg.smithery_api_key == "st-direct"
 
     def test_filter_by_type(self):
         agg = Aggregator()
@@ -271,13 +232,6 @@ class TestAggregator:
         # None values should sort to end
         assert sorted_results[0].stars == 100
         assert sorted_results[1].stars == 50
-
-    def test_firecrawl_usage_tracking(self):
-        agg = Aggregator(firecrawl_limit=5)
-        usage = agg.get_firecrawl_usage()
-        assert usage["usage"] == 0
-        assert usage["limit"] == 5
-        assert usage["exceeded"] is False
 
 
 class TestUnifiedSchema:
@@ -396,7 +350,6 @@ class TestAsyncAggregator:
         # Mock all search methods to return empty
         agg.skillsmp.search = AsyncMock(return_value=[])
         agg.smithery.search = AsyncMock(return_value=[])
-        agg.glama.search_via_scrape = AsyncMock(return_value=[])
 
         await agg.search_all([Source.ALL], "test")
 

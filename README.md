@@ -4,10 +4,8 @@ A CLI tool that aggregates Claude skills, plugins, agents, and MCP servers from 
 
 ## Features
 
-- **Multi-source aggregation**: Searches SkillsMP, Smithery, Glama, and mcp.so
-- **API-first approach**: Uses native REST APIs where available (SkillsMP, Smithery)
-- **FireCrawl fallback**: LLM-powered scraping for sources without APIs (Glama, mcp.so)
-- **Usage limits**: Configurable FireCrawl request limits with permission prompting
+- **Multi-source aggregation**: Searches SkillsMP and Smithery
+- **API-first approach**: Uses native REST APIs for fast, reliable results
 - **Parallel searching**: Fetches from all sources concurrently for speed
 - **Unified schema**: Normalizes data from different sources into a consistent format
 - **Powerful filtering**: Filter by type, stars, downloads, category, author
@@ -25,7 +23,7 @@ cd skillseeker
 pip install -e .
 
 # Or install dependencies directly
-pip install click rich firecrawl-py httpx pydantic python-dotenv
+pip install click rich httpx pydantic python-dotenv
 ```
 
 ## Configuration
@@ -44,22 +42,11 @@ SKILLSMP_API_KEY=sk_live_your_key_here
 
 # Required for Smithery MCP registry
 SMITHERY_API_KEY=your_smithery_key
-
-# Required for Glama and mcp.so (fallback scraping)
-FIRECRAWL_API_KEY=fc-your_key_here
-
-# Limit FireCrawl requests per session (default: 10, 0 = unlimited)
-FIRECRAWL_LIMIT=10
-
-# Optional: For GitHub integration (creating issues from PR comments)
-GITHUB_TOKEN=your_github_token
 ```
 
 **Where to get API keys:**
 - SkillsMP: https://skillsmp.com/docs/api (requires account)
 - Smithery: https://smithery.ai/account/api-keys
-- FireCrawl: https://firecrawl.dev
-- GitHub Token: https://github.com/settings/tokens (needs `repo` scope for private repos, `public_repo` for public repos)
 
 ## Usage
 
@@ -195,9 +182,6 @@ skillseeker sources
 # List resource types
 skillseeker types
 
-# Show FireCrawl usage configuration
-skillseeker usage
-
 # Export unified schema
 skillseeker schema -o my-schema.json
 ```
@@ -208,8 +192,6 @@ skillseeker schema -o my-schema.json
 |--------|------|-----|-------------|
 | **skillsmp** | Skills | REST API | 10,000+ GitHub-sourced Claude skills with AI semantic search |
 | **smithery** | MCP Servers | REST API | Smithery MCP server registry |
-| **glama** | MCP Servers | FireCrawl | Glama MCP server directory |
-| **mcp_so** | MCP Servers | FireCrawl | mcp.so server directory |
 
 ## Resource Types
 
@@ -220,24 +202,6 @@ skillseeker schema -o my-schema.json
 - `command` - Slash commands
 - `all` - All types
 
-## FireCrawl Usage Limits
-
-To control FireCrawl API costs, you can set a request limit:
-
-```bash
-# In .env file
-FIRECRAWL_LIMIT=10  # Prompt for permission after 10 requests
-FIRECRAWL_LIMIT=0   # Unlimited
-```
-
-When the limit is reached, you'll be prompted to allow additional requests:
-
-```
-FireCrawl usage limit (10) reached.
-Current usage: 10 requests
-Allow additional FireCrawl requests? [y/N]:
-```
-
 ## Unified Schema
 
 All resources are normalized to this schema:
@@ -247,7 +211,7 @@ All resources are normalized to this schema:
   "name": "string",
   "description": "string",
   "type": "skill|plugin|mcp_server|agent|command",
-  "source": "skillsmp|smithery|glama|mcp_so",
+  "source": "skillsmp|smithery",
   "url": "string",
   "author": "string|null",
   "github_url": "string|null",
@@ -307,12 +271,10 @@ ruff check .
 query > API clients (parallel) > normalize > filter > sort > return
            │
            ├── SkillsMP API (native REST)
-           ├── Smithery API (native REST)
-           ├── Glama (FireCrawl scraping)
-           └── mcp.so (FireCrawl scraping)
+           └── Smithery API (native REST)
 ```
 
-The CLI prioritizes native REST APIs for reliability and speed, with FireCrawl's LLM-powered extraction as a fallback for sources that don't expose public APIs.
+The CLI uses native REST APIs for reliability and speed.
 
 ## License
 
