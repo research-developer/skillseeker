@@ -80,10 +80,12 @@ def infer_verbosity(args, kwargs) -> Verbosity:
     if args:
         first = args[0]
         if isinstance(first, str):
-            if any(pattern.search(first) for pattern in ERROR_PATTERNS):
-                return Verbosity.ERROR
-            if any(pattern.search(first) for pattern in WARNING_PATTERNS):
-                return Verbosity.WARNING
+            for level, patterns in (
+                (Verbosity.ERROR, ERROR_PATTERNS),
+                (Verbosity.WARNING, WARNING_PATTERNS),
+            ):
+                if any(pattern.search(first) for pattern in patterns):
+                    return level
 
     return Verbosity.INFO
 
