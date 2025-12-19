@@ -61,6 +61,14 @@ def _should_log(level: Verbosity) -> bool:
 
 
 def _infer_verbosity(args, kwargs) -> Verbosity:
+    """
+    Infer verbosity for a console call.
+
+    Callers can pass `_verbosity` explicitly to avoid the heuristic.
+    Otherwise, we fall back to detecting common Rich color tags or
+    keywords so existing console.print calls keep working without
+    refactoring each site.
+    """
     explicit = kwargs.pop("_verbosity", None)
     if explicit:
         return Verbosity(explicit)
@@ -78,6 +86,7 @@ def _infer_verbosity(args, kwargs) -> Verbosity:
 
 
 def _filtered_print(*args, **kwargs):
+    """Global wrapper to apply verbosity filtering to console.print."""
     level = _infer_verbosity(args, kwargs)
     if _should_log(level):
         _raw_console_print(*args, **kwargs)
