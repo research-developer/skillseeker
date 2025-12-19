@@ -152,7 +152,7 @@ class TestVerbosityControls:
         def fake_print(*args, **kwargs):
             captured.append(args[0] if args else "")
 
-        monkeypatch.setattr(skillseeker_module, "_raw_console_print", fake_print)
+        monkeypatch.setattr(skillseeker_module.console, "_raw_console_print", fake_print)
 
         try:
             skillseeker_module.console.print("[dim]info message[/dim]")
@@ -172,7 +172,7 @@ class TestVerbosityControls:
         def fake_print(*args, **kwargs):
             captured.append(args[0] if args else "")
 
-        monkeypatch.setattr(skillseeker_module, "_raw_console_print", fake_print)
+        monkeypatch.setattr(skillseeker_module.console, "_raw_console_print", fake_print)
 
         try:
             skillseeker_module.console.print("details", _verbosity=Verbosity.ERROR)

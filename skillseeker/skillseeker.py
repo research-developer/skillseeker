@@ -28,21 +28,14 @@ from rich import box
 # Load environment variables from .env file
 load_dotenv()
 
-console = Console()
-
 class Verbosity(str, Enum):
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
 
 
-VERBOSITY_ORDER = {
-    Verbosity.INFO: 0,
-    Verbosity.WARNING: 1,
-    Verbosity.ERROR: 2
-}
+VERBOSITY_ORDER = {Verbosity.INFO: 0, Verbosity.WARNING: 1, Verbosity.ERROR: 2}
 _current_verbosity = Verbosity.INFO
-_raw_console_print = console.print
 
 
 def set_verbosity(level: Verbosity | str):
@@ -69,7 +62,7 @@ def _infer_verbosity(args, kwargs) -> Verbosity:
     keywords so existing console.print calls keep working without
     refactoring each site.
     """
-    explicit = kwargs.pop("_verbosity", None)
+    explicit = kwargs.get("_verbosity")
     if explicit:
         return Verbosity(explicit)
 
@@ -85,14 +78,22 @@ def _infer_verbosity(args, kwargs) -> Verbosity:
     return Verbosity.INFO
 
 
-def _filtered_print(*args, **kwargs):
-    """Global wrapper to apply verbosity filtering to console.print."""
-    level = _infer_verbosity(args, kwargs)
-    if _should_log(level):
-        _raw_console_print(*args, **kwargs)
+class VerboseConsole(Console):
+    """Console that respects global verbosity settings."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._raw_console_print = super().print
+
+    def print(self, *args, **kwargs):
+        level = _infer_verbosity(args, kwargs)
+        clean_kwargs = dict(kwargs)
+        clean_kwargs.pop("_verbosity", None)
+        if _should_log(level):
+            self._raw_console_print(*args, **clean_kwargs)
 
 
-console.print = _filtered_print
+console = VerboseConsole()
 
 
 class ResourceType(str, Enum):
