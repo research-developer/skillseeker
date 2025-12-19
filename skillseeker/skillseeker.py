@@ -532,8 +532,16 @@ async def do_single_install(source: str, global_install: bool, name_override: Op
                 console.print(f"[dim]Found GitHub URL: {skill_data.github_url}[/dim]")
                 try:
                     content, _ = await fetch_github_content(skill_data.github_url, client)
-                except Exception:
-                    pass
+                except httpx.HTTPError as e:
+                    console.print(
+                        f"[yellow]Warning: failed to fetch skill content from GitHub URL "
+                        f"({skill_data.github_url}): {e}[/yellow]"
+                    )
+                except Exception as e:
+                    console.print(
+                        f"[yellow]Warning: unexpected error while fetching skill content "
+                        f"from GitHub URL ({skill_data.github_url}): {e}[/yellow]"
+                    )
 
             # If no content yet, create a basic SKILL.md from the data
             if not content:
