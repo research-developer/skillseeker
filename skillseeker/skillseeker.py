@@ -36,6 +36,8 @@ class Verbosity(str, Enum):
 
 VERBOSITY_ORDER = {Verbosity.INFO: 0, Verbosity.WARNING: 1, Verbosity.ERROR: 2}
 _current_verbosity = Verbosity.INFO
+WARNING_PATTERNS = (re.compile(r"\[yellow\]"), re.compile(r"\bwarning\b"))
+ERROR_PATTERNS = (re.compile(r"\[red\]"), re.compile(r"\berror\b"))
 
 
 def set_verbosity(level: Verbosity | str):
@@ -53,7 +55,7 @@ def _should_log(level: Verbosity) -> bool:
     return VERBOSITY_ORDER[level] >= VERBOSITY_ORDER[_current_verbosity]
 
 
-def _infer_verbosity(args, kwargs) -> Verbosity:
+def infer_verbosity(args, kwargs) -> Verbosity:
     """
     Infer verbosity for a console call.
 
@@ -70,9 +72,9 @@ def _infer_verbosity(args, kwargs) -> Verbosity:
         first = args[0]
         if isinstance(first, str):
             lower = first.lower()
-            if "[red]" in lower or "error" in lower:
+            if any(pattern.search(lower) for pattern in ERROR_PATTERNS):
                 return Verbosity.ERROR
-            if "[yellow]" in lower or "warning" in lower:
+            if any(pattern.search(lower) for pattern in WARNING_PATTERNS):
                 return Verbosity.WARNING
 
     return Verbosity.INFO
@@ -86,9 +88,11 @@ class VerboseConsole(Console):
         self._raw_console_print = super().print
 
     def print(self, *args, **kwargs):
-        level = _infer_verbosity(args, kwargs)
-        clean_kwargs = dict(kwargs)
-        clean_kwargs.pop("_verbosity", None)
+        level = infer_verbosity(args, kwargs)
+        if "_verbosity" in kwargs:
+            clean_kwargs = {k: v for k, v in kwargs.items() if k != "_verbosity"}
+        else:
+            clean_kwargs = kwargs
         if _should_log(level):
             self._raw_console_print(*args, **clean_kwargs)
 
