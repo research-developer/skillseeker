@@ -5,6 +5,7 @@ import json
 import os
 from dataclasses import asdict
 from unittest.mock import Mock, patch, AsyncMock
+import skillseeker.skillseeker as skillseeker_module
 
 from skillseeker import (
     Aggregator,
@@ -17,6 +18,9 @@ from skillseeker.skillseeker import (
     SkillsmpClient,
     SmitheryClient,
     GlamaClient,
+    Verbosity,
+    get_verbosity,
+    set_verbosity,
 )
 
 
@@ -126,6 +130,57 @@ class TestFirecrawlTracker:
         assert tracker.can_use() is False
         tracker.permission_granted = True
         assert tracker.can_use() is True
+
+
+class TestVerbosityControls:
+    """Test verbosity flag handling"""
+
+    def test_set_and_get_verbosity(self):
+        original = get_verbosity()
+        try:
+            set_verbosity(Verbosity.WARNING)
+            assert get_verbosity() == Verbosity.WARNING
+        finally:
+            set_verbosity(original)
+
+    def test_filtered_print_respects_levels(self, monkeypatch):
+        original = get_verbosity()
+        set_verbosity(Verbosity.WARNING)
+
+        captured = []
+
+        def fake_print(*args, **kwargs):
+            captured.append(args[0] if args else "")
+
+        monkeypatch.setattr(skillseeker_module, "_raw_console_print", fake_print)
+
+        try:
+            skillseeker_module.console.print("[dim]info message[/dim]")
+            skillseeker_module.console.print("[yellow]warn message[/yellow]")
+            skillseeker_module.console.print("[red]error message[/red]")
+
+            assert captured == ["[yellow]warn message[/yellow]", "[red]error message[/red]"]
+        finally:
+            set_verbosity(original)
+
+    def test_explicit_verbosity_override(self, monkeypatch):
+        original = get_verbosity()
+        set_verbosity(Verbosity.ERROR)
+
+        captured = []
+
+        def fake_print(*args, **kwargs):
+            captured.append(args[0] if args else "")
+
+        monkeypatch.setattr(skillseeker_module, "_raw_console_print", fake_print)
+
+        try:
+            skillseeker_module.console.print("details", _verbosity=Verbosity.ERROR)
+            skillseeker_module.console.print("hidden info", _verbosity=Verbosity.INFO)
+
+            assert captured == ["details"]
+        finally:
+            set_verbosity(original)
 
 
 class TestAggregator:

@@ -70,6 +70,9 @@ skillseeker search -s smithery -q "postgres"
 
 # Search without query (browse all)
 skillseeker search -s smithery
+
+# Increase or reduce output verbosity (info, warning, error)
+skillseeker --verbosity warning search -q "database"
 ```
 
 ### Filtering

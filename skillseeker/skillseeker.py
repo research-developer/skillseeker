@@ -30,6 +30,61 @@ load_dotenv()
 
 console = Console()
 
+class Verbosity(str, Enum):
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+VERBOSITY_ORDER = {
+    Verbosity.INFO: 0,
+    Verbosity.WARNING: 1,
+    Verbosity.ERROR: 2
+}
+_current_verbosity = Verbosity.INFO
+_raw_console_print = console.print
+
+
+def set_verbosity(level: Verbosity | str):
+    """Set global verbosity for console output."""
+    global _current_verbosity
+    _current_verbosity = Verbosity(level)
+
+
+def get_verbosity() -> Verbosity:
+    """Get the current verbosity level."""
+    return _current_verbosity
+
+
+def _should_log(level: Verbosity) -> bool:
+    return VERBOSITY_ORDER[level] >= VERBOSITY_ORDER[_current_verbosity]
+
+
+def _infer_verbosity(args, kwargs) -> Verbosity:
+    explicit = kwargs.pop("_verbosity", None)
+    if explicit:
+        return Verbosity(explicit)
+
+    if args:
+        first = args[0]
+        if isinstance(first, str):
+            lower = first.lower()
+            if "[red]" in lower or "error" in lower:
+                return Verbosity.ERROR
+            if "[yellow]" in lower or "warning" in lower:
+                return Verbosity.WARNING
+
+    return Verbosity.INFO
+
+
+def _filtered_print(*args, **kwargs):
+    level = _infer_verbosity(args, kwargs)
+    if _should_log(level):
+        _raw_console_print(*args, **kwargs)
+
+
+console.print = _filtered_print
+
 
 class ResourceType(str, Enum):
     SKILL = "skill"
@@ -89,7 +144,10 @@ class FirecrawlTracker:
             return True
 
         console.print(f"\n[yellow]FireCrawl usage limit ({self.limit}) reached.[/yellow]")
-        console.print(f"[dim]Current usage: {self.usage_count} requests[/dim]")
+        console.print(
+            f"[dim]Current usage: {self.usage_count} requests[/dim]",
+            _verbosity=Verbosity.WARNING,
+        )
 
         self.permission_granted = Confirm.ask(
             "Allow additional FireCrawl requests?",
@@ -646,10 +704,19 @@ def display_results(results: list[Resource], output_format: str = "table"):
 
 # CLI Commands
 @click.group()
+@click.option(
+    "-v",
+    "--verbosity",
+    type=click.Choice([v.value for v in Verbosity]),
+    default=Verbosity.INFO.value,
+    help="Set output verbosity: info, warning, or error"
+)
 @click.pass_context
-def cli(ctx):
+def cli(ctx, verbosity):
     """Skillseeker - Search across multiple Claude skill and MCP marketplaces"""
     ctx.ensure_object(dict)
+    set_verbosity(verbosity)
+    ctx.obj["verbosity"] = verbosity
 
 
 @cli.command()
@@ -676,8 +743,14 @@ def search(ctx, query, source, resource_type, min_stars, min_downloads, category
 
     if not (has_skillsmp or has_smithery or has_firecrawl):
         console.print("[red]Error: No API keys configured.[/red]")
-        console.print("Set at least one of: SKILLSMP_API_KEY, SMITHERY_API_KEY, or FIRECRAWL_API_KEY")
-        console.print("See .env.example for configuration options.")
+        console.print(
+            "Set at least one of: SKILLSMP_API_KEY, SMITHERY_API_KEY, or FIRECRAWL_API_KEY",
+            _verbosity=Verbosity.ERROR,
+        )
+        console.print(
+            "See .env.example for configuration options.",
+            _verbosity=Verbosity.ERROR,
+        )
         sys.exit(1)
 
     async def run_search():
@@ -975,7 +1048,10 @@ def install(source, global_install, name, dry_run):
                         return
                 else:
                     console.print(f"[red]Unsupported URL: {source}[/red]")
-                    console.print("Supported: GitHub URLs (github.com, raw.githubusercontent.com)")
+                    console.print(
+                        "Supported: GitHub URLs (github.com, raw.githubusercontent.com)",
+                        _verbosity=Verbosity.ERROR,
+                    )
                     return
             else:
                 # Assume SkillsMP skill ID
@@ -1149,7 +1225,7 @@ def uninstall(skill_name, global_install, yes):
 
     if not install_path.exists():
         console.print(f"[yellow]Skill '{skill_name}' not found in {location} location.[/yellow]")
-        console.print(f"[dim]Path: {install_path}[/dim]")
+        console.print(f"[dim]Path: {install_path}[/dim]", _verbosity=Verbosity.WARNING)
         return
 
     if not yes:
