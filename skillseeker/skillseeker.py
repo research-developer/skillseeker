@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from enum import Enum
@@ -1445,7 +1446,6 @@ def parse_pr_identifier(pr_input: str) -> tuple[Optional[str], Optional[str], Op
 def get_repo_from_git() -> tuple[Optional[str], Optional[str]]:
     """Extract owner/repo from git remote."""
     try:
-        import subprocess
         result = subprocess.run(
             ["git", "remote", "get-url", "origin"],
             capture_output=True,

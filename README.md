@@ -12,6 +12,7 @@ A CLI tool that aggregates Claude skills, plugins, agents, and MCP servers from 
 - **Unified schema**: Normalizes data from different sources into a consistent format
 - **Powerful filtering**: Filter by type, stars, downloads, category, author
 - **Multiple output formats**: Table, JSON, or simple text
+- **GitHub integration**: Create issues from unresolved PR review comments
 
 ## Installation
 
@@ -49,12 +50,16 @@ FIRECRAWL_API_KEY=fc-your_key_here
 
 # Limit FireCrawl requests per session (default: 10, 0 = unlimited)
 FIRECRAWL_LIMIT=10
+
+# Optional: For GitHub integration (creating issues from PR comments)
+GITHUB_TOKEN=your_github_token
 ```
 
 **Where to get API keys:**
 - SkillsMP: https://skillsmp.com/docs/api (requires account)
 - Smithery: https://smithery.ai/account/api-keys
 - FireCrawl: https://firecrawl.dev
+- GitHub Token: https://github.com/settings/tokens (needs `repo` scope for private repos, `public_repo` for public repos)
 
 ## Usage
 
@@ -162,6 +167,23 @@ skillseeker uninstall my-skill --global
 
 # Uninstall without confirmation
 skillseeker uninstall my-skill -y
+```
+
+### GitHub Integration
+
+```bash
+# Create a GitHub issue from unresolved PR comments
+skillseeker create-issue https://github.com/owner/repo/pull/123 --token YOUR_TOKEN
+
+# Or use environment variable for token
+export GITHUB_TOKEN=your_token_here
+skillseeker create-issue owner/repo#123
+
+# Use PR number from current repo
+skillseeker create-issue 123
+
+# Preview without creating
+skillseeker create-issue 123 --dry-run
 ```
 
 ### Utility Commands
