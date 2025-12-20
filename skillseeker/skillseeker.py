@@ -147,6 +147,7 @@ class Resource:
     type: str
     source: str
     url: str
+    identifier: Optional[str] = None  # Unique ID for installation (slug, qualified_name, etc.)
     author: Optional[str] = None
     github_url: Optional[str] = None
     stars: Optional[int] = None
@@ -211,12 +212,14 @@ class SkillsmpClient:
                 # AI search nests skill info under "skill" key
                 if "skill" in item:
                     item = item["skill"]
+                slug = item.get("slug") or item.get("id")
                 resource = Resource(
                     name=item.get("name", "Unknown"),
                     description=item.get("description", ""),
                     type=ResourceType.SKILL.value,
                     source=Source.SKILLSMP.value,
-                    url=item.get("url", f"https://skillsmp.com/skills/{item.get('slug', '')}"),
+                    url=item.get("url", f"https://skillsmp.com/skills/{slug or ''}"),
+                    identifier=slug,
                     author=item.get("author"),
                     github_url=item.get("github_url") or item.get("githubUrl"),
                     stars=item.get("stars"),
@@ -291,6 +294,7 @@ class SmitheryClient:
                     type=ResourceType.MCP_SERVER.value,
                     source=Source.SMITHERY.value,
                     url=server.get("homepage") or f"https://smithery.ai/server/{qualified_name}",
+                    identifier=qualified_name,
                     author=qualified_name.split("/")[0] if "/" in qualified_name else None,
                     github_url=server.get("repository"),
                     stars=server.get("useCount"),
@@ -439,21 +443,22 @@ def copy_to_clipboard(text: str) -> bool:
 
 def get_installable_identifier(resource: Resource) -> str:
     """Get the best identifier for installing a resource."""
-    # For skills from SkillsMP, prefer github_url, then name
+    # Prefer the identifier field (slug for SkillsMP, qualified_name for Smithery)
+    if resource.identifier:
+        return resource.identifier
+
+    # Fallback: For skills from SkillsMP, prefer github_url
     if resource.source == Source.SKILLSMP.value:
         if resource.github_url:
             return resource.github_url
-        return resource.name
 
-    # For Smithery MCP servers, use the install command or URL
+    # Fallback: For Smithery MCP servers, extract from install command
     if resource.source == Source.SMITHERY.value:
-        # Extract qualified name from install command if available
         if resource.install_command:
             # "npx @smithery/cli install owner/repo" -> "owner/repo"
             parts = resource.install_command.split()
             if len(parts) >= 4:
                 return parts[-1]
-        return resource.url
 
     return resource.url or resource.name
 
