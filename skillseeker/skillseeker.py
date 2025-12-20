@@ -463,6 +463,21 @@ def get_installable_identifier(resource: Resource) -> str:
     return resource.url or resource.name
 
 
+def get_install_command(resource: Resource, global_install: bool = False) -> str:
+    """Get the full install command for a resource based on its source."""
+    identifier = get_installable_identifier(resource)
+
+    if resource.source == Source.SMITHERY.value:
+        # Smithery MCP servers use npx @smithery/cli
+        if resource.install_command:
+            return resource.install_command
+        return f"npx @smithery/cli install {identifier}"
+
+    # SkillsMP and other sources use skillseeker install
+    location = "--global " if global_install else ""
+    return f"skillseeker install {location}{identifier}".strip()
+
+
 def interactive_select(results: list[Resource], global_install: bool = False) -> None:
     """Show interactive multi-select menu for search results."""
     if not results:
@@ -518,25 +533,38 @@ def interactive_select(results: list[Resource], global_install: bool = False) ->
     identifiers = [get_installable_identifier(r) for r in selected_resources]
 
     if action == "copy":
-        # Format for pasting after "skillseeker install"
-        clipboard_text = " ".join(f'"{i}"' if " " in i else i for i in identifiers)
+        # Copy all install commands
+        commands = [get_install_command(r, global_install) for r in selected_resources]
+        clipboard_text = "\n".join(commands)
         if copy_to_clipboard(clipboard_text):
-            console.print(f"\n[green]✓ Copied to clipboard![/green]")
-            console.print(f"[dim]Paste after: skillseeker install[/dim]")
-            console.print(f"[cyan]{clipboard_text}[/cyan]")
+            console.print(f"\n[green]✓ Copied {len(commands)} command(s) to clipboard![/green]")
         else:
-            console.print("\n[yellow]Could not copy to clipboard. Here are the identifiers:[/yellow]")
-            console.print(f"[cyan]{clipboard_text}[/cyan]")
+            console.print("\n[yellow]Could not copy to clipboard. Here are the commands:[/yellow]")
+        for cmd in commands:
+            console.print(f"  [cyan]{cmd}[/cyan]")
 
     elif action == "show":
         console.print("\n[bold]Install commands:[/bold]")
-        location = "--global" if global_install else ""
-        for ident in identifiers:
-            console.print(f"  skillseeker install {location} {ident}".strip())
+        for r in selected_resources:
+            cmd = get_install_command(r, global_install)
+            console.print(f"  {cmd}")
 
     elif action == "install":
-        console.print("\n[bold]Installing selected items...[/bold]\n")
-        install_multiple_resources(identifiers, global_install)
+        # Separate by source type
+        skillsmp_resources = [r for r in selected_resources if r.source == Source.SKILLSMP.value]
+        smithery_resources = [r for r in selected_resources if r.source == Source.SMITHERY.value]
+
+        if skillsmp_resources:
+            console.print("\n[bold]Installing SkillsMP skills...[/bold]\n")
+            skillsmp_ids = [get_installable_identifier(r) for r in skillsmp_resources]
+            install_multiple_resources(skillsmp_ids, global_install)
+
+        if smithery_resources:
+            console.print("\n[bold]Smithery MCP servers require npx to install:[/bold]")
+            for r in smithery_resources:
+                cmd = get_install_command(r, global_install)
+                console.print(f"  [cyan]{cmd}[/cyan]")
+            console.print("\n[dim]Run these commands in your terminal to install.[/dim]")
 
 
 async def _install_multiple_resources_async(sources: list[str], global_install: bool = False) -> tuple[int, int]:
