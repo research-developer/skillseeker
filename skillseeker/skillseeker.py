@@ -168,6 +168,48 @@ class SkillsmpClient:
         self.api_key = api_key
         self.client = httpx.AsyncClient(timeout=30.0)
 
+    async def get_skill(self, skill_id: str) -> Optional[Resource]:
+        """Get a skill by its ID/slug directly."""
+        if not self.api_key:
+            return None
+
+        url = f"{self.BASE_URL}/skills/{skill_id}"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+
+        try:
+            response = await self.client.get(url, headers=headers)
+            response.raise_for_status()
+            item = response.json()
+
+            if not isinstance(item, dict):
+                return None
+
+            # Handle nested data structure
+            if "data" in item:
+                item = item["data"]
+
+            slug = item.get("slug") or item.get("id") or skill_id
+            return Resource(
+                name=item.get("name", "Unknown"),
+                description=item.get("description", ""),
+                type=ResourceType.SKILL.value,
+                source=Source.SKILLSMP.value,
+                url=item.get("url", f"https://skillsmp.com/skills/{slug}"),
+                identifier=slug,
+                author=item.get("author"),
+                github_url=item.get("github_url") or item.get("githubUrl"),
+                stars=item.get("stars"),
+                downloads=item.get("downloads"),
+                install_command=item.get("install_command") or item.get("installCommand"),
+                category=item.get("category"),
+                tags=item.get("tags", [])
+            )
+
+        except httpx.HTTPStatusError:
+            return None
+        except Exception:
+            return None
+
     async def search(
         self,
         query: str,
@@ -465,16 +507,25 @@ def get_installable_identifier(resource: Resource) -> str:
 
 def get_install_command(resource: Resource, global_install: bool = False) -> str:
     """Get the full install command for a resource based on its source."""
-    identifier = get_installable_identifier(resource)
+    location = "--global " if global_install else ""
 
     if resource.source == Source.SMITHERY.value:
         # Smithery MCP servers use npx @smithery/cli
         if resource.install_command:
             return resource.install_command
+        identifier = get_installable_identifier(resource)
         return f"npx @smithery/cli install {identifier}"
 
-    # SkillsMP and other sources use skillseeker install
-    location = "--global " if global_install else ""
+    # SkillsMP skills - prefer GitHub URL for direct install, or skill name for search-based install
+    if resource.source == Source.SKILLSMP.value:
+        # GitHub URL is the most reliable for direct installation
+        if resource.github_url:
+            return f"skillseeker install {location}{resource.github_url}".strip()
+        # Fall back to skill name with --from flag for clarity
+        return f"skillseeker install {location}--from skillsmp {resource.name}".strip()
+
+    # Other sources use identifier
+    identifier = get_installable_identifier(resource)
     return f"skillseeker install {location}{identifier}".strip()
 
 
@@ -596,7 +647,7 @@ def install_multiple_resources(sources: list[str], global_install: bool = False)
         console.print(f"  [red]✗ Failed: {fail_count}[/red]")
 
 
-async def do_single_install(source: str, global_install: bool, name_override: Optional[str], dry_run: bool) -> None:
+async def do_single_install(source: str, global_install: bool, name_override: Optional[str], dry_run: bool, source_provider: str = "auto") -> None:
     """Core install logic for a single source."""
     async with httpx.AsyncClient(timeout=30.0) as client:
         content = None
@@ -618,29 +669,55 @@ async def do_single_install(source: str, global_install: bool, name_override: Op
             else:
                 raise Exception(f"Unsupported URL: {source}")
         else:
-            # Assume SkillsMP skill ID
+            # Determine if this is a Smithery or SkillsMP identifier
+            is_smithery = (
+                source_provider == "smithery" or
+                (source_provider == "auto" and is_smithery_identifier(source))
+            )
+
+            if is_smithery:
+                # Smithery MCP servers - just show the npx command
+                install_cmd = f"npx @smithery/cli install {source}"
+                console.print(f"[cyan]Smithery:[/cyan] {install_cmd}")
+                if copy_to_clipboard(install_cmd):
+                    console.print("[dim]Command copied to clipboard[/dim]")
+                return
+
+            # SkillsMP skill ID
             source_type = "skillsmp"
             api_key = os.environ.get("SKILLSMP_API_KEY")
             if not api_key:
                 raise Exception("SkillsMP API key required. Set SKILLSMP_API_KEY in .env")
 
             console.print(f"[dim]Fetching from SkillsMP: {source}[/dim]")
-            # Search for the skill
             search_client = SkillsmpClient(api_key)
-            results = await search_client.search(source, use_ai=False)
-            await search_client.close()
 
-            if not results:
-                raise Exception(f"Skill not found: {source}")
+            # Try direct lookup first (by slug/ID)
+            skill_data = await search_client.get_skill(source)
 
-            # Find exact match or first result
-            skill_data = None
-            for r in results:
-                if r.name == source or source in r.name:
-                    skill_data = r
-                    break
+            # If not found, fall back to search
             if not skill_data:
-                skill_data = results[0]
+                console.print(f"[dim]Direct lookup failed, trying search...[/dim]")
+                results = await search_client.search(source, use_ai=False)
+
+                if not results:
+                    await search_client.close()
+                    raise Exception(f"Skill not found: {source}")
+
+                # Find exact match by identifier or name
+                for r in results:
+                    # Match by identifier (slug)
+                    if r.identifier and r.identifier == source:
+                        skill_data = r
+                        break
+                    # Match by name
+                    if r.name == source or source in r.name:
+                        skill_data = r
+                        break
+                if not skill_data:
+                    skill_data = results[0]
+
+            await search_client.close()
 
             if not skill_name:
                 skill_name = skill_data.name
@@ -1098,23 +1175,50 @@ def extract_skill_name_from_url(url: str) -> str:
     return repo
 
 
+def is_smithery_identifier(identifier: str) -> bool:
+    """Check if an identifier looks like a Smithery qualified name."""
+    # Smithery identifiers: @owner/repo or owner/repo (no spaces, contains /)
+    if identifier.startswith("http://") or identifier.startswith("https://"):
+        return False
+    # Identifiers starting with @ are Smithery
+    if identifier.startswith("@"):
+        return True
+    # Check for owner/repo pattern without spaces
+    if "/" in identifier and " " not in identifier:
+        # Could be Smithery or GitHub URL - need more context
+        # Smithery identifiers are typically short like "owner/repo"
+        parts = identifier.split("/")
+        if len(parts) == 2 and all(p.strip() for p in parts):
+            return True
+    return False
+
+
 @cli.command()
 @click.argument("sources", nargs=-1, required=True)
 @click.option("-g", "--global", "global_install", is_flag=True, help="Install globally to ~/.claude/skills/")
 @click.option("-n", "--name", help="Override the skill name (only works with single source)")
 @click.option("--dry-run", is_flag=True, help="Show what would be installed without installing")
-def install(sources, global_install, name, dry_run):
+@click.option(
+    "--from",
+    "source_provider",
+    type=click.Choice(["auto", "skillsmp", "smithery"]),
+    default="auto",
+    help="Source provider: auto (detect), skillsmp (SkillsMP skills), smithery (Smithery MCP servers)"
+)
+def install(sources, global_install, name, dry_run, source_provider):
     """
-    Install skill(s) from GitHub URLs or SkillsMP.
+    Install skill(s) from GitHub URLs, SkillsMP, or Smithery.
 
     SOURCES can be one or more of:
     - GitHub URLs (https://github.com/owner/repo or path to SKILL.md)
-    - SkillsMP skill IDs (e.g., "zenobi-us/postgres-pro")
+    - SkillsMP skill IDs (e.g., "claude-postgres-skill")
+    - Smithery MCP server identifiers (e.g., "@smithery-ai/github", "github")
 
     Examples:
         skillseeker install https://github.com/user/repo
-        skillseeker install https://github.com/user/repo/tree/main/skills/my-skill
-        skillseeker install zenobi-us/postgres-pro --global
+        skillseeker install @smithery-ai/github  # Smithery MCP server
+        skillseeker install github --source-type smithery
+        skillseeker install my-skill --source-type skillsmp --global
         skillseeker install skill1 skill2 skill3  # Install multiple
     """
     # Handle --name with multiple sources
@@ -1180,7 +1284,43 @@ def install(sources, global_install, name, dry_run):
                     )
                     return
             else:
-                # Assume SkillsMP skill ID
+                # Determine if this is a Smithery or SkillsMP identifier
+                is_smithery = (
+                    source_provider == "smithery" or
+                    (source_provider == "auto" and is_smithery_identifier(source))
+                )
+
+                if is_smithery:
+                    # Smithery MCP servers - show npx command
+                    source_type = "smithery"
+                    install_cmd = f"npx @smithery/cli install {source}"
+
+                    if dry_run:
+                        console.print(Panel.fit(
+                            f"[bold]MCP Server:[/bold] {source}\n"
+                            f"[bold]Source:[/bold] Smithery\n"
+                            f"[bold]Install command:[/bold]\n\n"
+                            f"  [cyan]{install_cmd}[/cyan]\n\n"
+                            f"[dim]Run this command in your terminal to install.[/dim]",
+                            title="Dry Run - Smithery MCP Server"
+                        ))
+                        return
+
+                    console.print(Panel.fit(
+                        f"[bold]Smithery MCP servers are installed via npx.[/bold]\n\n"
+                        f"Run the following command in your terminal:\n\n"
+                        f"  [cyan]{install_cmd}[/cyan]\n\n"
+                        f"[dim]This will install the MCP server configuration.[/dim]",
+                        title="Smithery Installation"
+                    ))
+
+                    # Copy to clipboard if available
+                    if copy_to_clipboard(install_cmd):
+                        console.print("[green]✓ Command copied to clipboard![/green]")
+
+                    return
+
+                # SkillsMP skill ID
                 source_type = "skillsmp"
                 api_key = os.environ.get("SKILLSMP_API_KEY")
                 if not api_key:
@@ -1189,23 +1329,35 @@ def install(sources, global_install, name, dry_run):
 
                 console.print(f"[dim]Fetching from SkillsMP: {source}[/dim]")
                 try:
-                    # Search for the skill
                     search_client = SkillsmpClient(api_key)
-                    results = await search_client.search(source, use_ai=False)
-                    await search_client.close()
 
-                    if not results:
-                        console.print(f"[red]Skill not found: {source}[/red]")
-                        return
+                    # Try direct lookup first (by slug/ID)
+                    skill_data = await search_client.get_skill(source)
 
-                    # Find exact match or first result
-                    skill_data = None
-                    for r in results:
-                        if r.name == source or source in r.name:
-                            skill_data = r
-                            break
+                    # If not found, fall back to search
                     if not skill_data:
-                        skill_data = results[0]
+                        console.print(f"[dim]Direct lookup failed, trying search...[/dim]")
+                        results = await search_client.search(source, use_ai=False)
+
+                        if not results:
+                            await search_client.close()
+                            console.print(f"[red]Skill not found: {source}[/red]")
+                            return
+
+                        # Find exact match by identifier or name
+                        for r in results:
+                            # Match by identifier (slug)
+                            if r.identifier and r.identifier == source:
+                                skill_data = r
+                                break
+                            # Match by name
+                            if r.name == source or source in r.name:
+                                skill_data = r
+                                break
+                        if not skill_data:
+                            skill_data = results[0]
+
+                    await search_client.close()
 
                     if not skill_name:
                         skill_name = skill_data.name
