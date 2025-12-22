@@ -607,8 +607,12 @@ def interactive_select(results: list[Resource], global_install: bool = False) ->
 
         if skillsmp_resources:
             console.print("\n[bold]Installing SkillsMP skills...[/bold]\n")
-            skillsmp_ids = [get_installable_identifier(r) for r in skillsmp_resources]
-            install_multiple_resources(skillsmp_ids, global_install)
+            # Use GitHub URL if available (most reliable), otherwise use skill name
+            skillsmp_sources = [
+                r.github_url if r.github_url else r.name
+                for r in skillsmp_resources
+            ]
+            install_multiple_resources(skillsmp_sources, global_install)
 
         if smithery_resources:
             console.print("\n[bold]Smithery MCP servers require npx to install:[/bold]")
